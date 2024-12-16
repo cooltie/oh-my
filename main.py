@@ -10,7 +10,6 @@ import uuid
 import hashlib
 import ast
 import os
-
 import logging
 
 logging.basicConfig(level=logging.DEBUG)  # DEBUG показывает максимум информации
