@@ -39,7 +39,7 @@ async def get_db_pool2():
     try:
         return await asyncpg.create_pool(
             host=os.getenv("PGHOST"),
-            port=int(os.getenv("PGPORT")),
+            port=os.getenv("PGPORT"),
             user=os.getenv("PGUSER"),
             password=os.getenv("PGPASSWORD"),
             database=os.getenv("PGDATABASE"),
@@ -53,7 +53,7 @@ async def get_db_pool2():
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = int(os.getenv("GROUP_ID"))  # Telegram ID администратора
+GROUP_ID = os.getenv("GROUP_ID")  # Telegram ID администратора
 
 # Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
