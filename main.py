@@ -81,7 +81,7 @@ async def register_user(telegram_id):
             anon_id = str(uuid.uuid4())
 
             # Создание нового топика
-            topic_title = f"Пользователь {anon_id[:8]}"
+            topic_title = f"Чат {anon_id[:4]}"
             topic_result = await bot.create_forum_topic(
                 chat_id=GROUP_ID, name=topic_title
             )
@@ -113,13 +113,27 @@ async def get_telegram_id(anon_id):
         return result["telegram_id"] if result else None
 
 
-# Обработчик команды /start
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    anon_id, topic_id = await register_user(message.from_user.id)
-    await message.answer(
-        f"Добро пожаловать! Ваш анонимный ID: {anon_id}. Вы можете писать сюда, и администратор ответит."
-    )
+    try:
+        anon_id, topic_id = await register_user(message.from_user.id)
+
+        # Получаем номер строки в базе
+        async with db_pool2.acquire() as conn:
+            result = await conn.fetchrow(
+                "SELECT id FROM an_users WHERE telegram_id = $1", message.from_user.id
+            )
+
+        if result:
+            user_number = result["id"]
+            topic_name = f"{user_number}"
+
+            await message.answer(
+                f"Добро пожаловать! Здесь вы можете написать свой запрос. Вы общаетесь с администраторами через бота, поэтому вы остаетесь для них анонимными."
+            )
+    except Exception as e:
+        logging.error(f"Ошибка при создании топика: {e}")
+        await message.answer("Произошла ошибка при создании вашей темы.")
 
 
 # Обработчик сообщений от пользователя
@@ -131,7 +145,7 @@ async def handle_user_message(message: types.Message):
     anon_id, topic_id = await register_user(message.from_user.id)
 
     # Формируем сообщение для отправки в топик
-    forward_message = f"Сообщение от {anon_id}:\n{message.text}"
+    forward_message = f"Сообщение от {str(anon_id)[:4]}:\n{message.text}"
 
     # Отправляем сообщение в топик
     await bot.send_message(
@@ -142,38 +156,75 @@ async def handle_user_message(message: types.Message):
     await message.answer("Ваше сообщение отправлено администратору.")
 
 
-# Обработка ответов администратора в топиках
-@dp.message(F.chat.type.in_(["group", "supergroup"]))
+@dp.message(F.chat.type.in_(["group", "supergroup"]) & ~F.text.startswith("/"))
 async def handle_admin_reply(message: types.Message):
     """
-    Обрабатывает сообщения от администратора в топиках группы.
+    Обрабатывает новые сообщения от администратора в топиках группы.
     """
-    logging.info(f"Сообщение от администратора: {message.text}, чат: {message.chat.id}")
-    try:
-        # Проверяем, что сообщение в формате "anon_id: ответ"
-        anon_id, reply_text = message.text.split(":", 1)
-        anon_id = anon_id.strip()
-        reply_text = reply_text.strip()
+    await process_admin_message(message)
 
-        # Получаем Telegram ID пользователя по анонимному ID
-        telegram_id = await get_telegram_id(anon_id)
-        if telegram_id:
+
+# Обработка новых сообщений администратора
+@dp.message(F.chat.type.in_(["group", "supergroup"]) & ~F.text.startswith("/"))
+async def handle_admin_reply(message: types.Message):
+    """
+    Обрабатывает только текстовые сообщения от администратора в топиках группы,
+    игнорируя команды.
+    """
+    # Если сообщение пустое или команда, игнорируем его
+    if not message.text or message.text.startswith("/"):
+        logging.info(f"Игнорирование команды или пустого сообщения: {message.text}")
+        return
+
+    # Если сообщение подходит под условия, обрабатываем его
+    await process_admin_message(message)
+
+
+# Обработка редактирования сообщений администратора
+@dp.edited_message(F.chat.type.in_(["group", "supergroup"]))
+async def handle_admin_edited_message(message: types.Message):
+    """
+    Обрабатывает редактированные сообщения от администратора в топиках группы.
+    """
+    await process_admin_message(message)
+
+
+# Общая функция обработки сообщений
+async def process_admin_message(message: types.Message):
+    """
+    Обрабатывает как новые, так и редактированные сообщения от администратора.
+    """
+    logging.info(
+        f"Обработка сообщения от администратора: {message.text}, чат: {message.chat.id}"
+    )
+
+    try:
+        # Получаем topic_id из текущего чата
+        topic_id = message.message_thread_id
+
+        # Находим telegram_id пользователя, связанного с этим topic_id
+        async with db_pool2.acquire() as conn:
+            result = await conn.fetchrow(
+                "SELECT telegram_id FROM an_users WHERE topic_id = $1", topic_id
+            )
+
+        if result:
+            telegram_id = result["telegram_id"]
+
+            # Пересылаем сообщение пользователю
             await bot.send_message(
-                chat_id=telegram_id, text=f"Ответ от администратора:\n\n{reply_text}"
+                chat_id=telegram_id, text=f"Ответ от администратора:\n\n{message.text}"
             )
             logging.info(f"Ответ успешно отправлен пользователю с ID {telegram_id}")
         else:
-            await bot.send_message(
-                chat_id=message.chat.id,
-                text=f"Ошибка: Пользователь с anon_id {anon_id} не найден.",
+            await message.reply(
+                "Ошибка: Не удалось найти пользователя для данного топика."
             )
-    except ValueError:
-        await message.reply(
-            "Неверный формат. Используйте формат: <анонимный ID>: <ответ>"
-        )
-        logging.error(f"Неверный формат сообщения: {message.text}")
+            logging.error(f"Не найден telegram_id для topic_id: {topic_id}")
+
     except Exception as e:
         logging.error(f"Ошибка при обработке ответа администратора: {e}")
+        await message.reply("Произошла ошибка при отправке ответа пользователю.")
 
 
 # Инициализация пула и запуск бота
