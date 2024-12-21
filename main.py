@@ -38,11 +38,11 @@ async def log_pool_state():
 async def get_db_pool2():
     try:
         return await asyncpg.create_pool(
-            host=os.getenv("host"),
-            port=int(os.getenv("port")),
-            user=os.getenv("user"),
-            password=os.getenv("password"),
-            database=os.getenv("database"),
+            host=os.getenv("PGHOST"),
+            port=int(os.getenv("PGPORT")),
+            user=os.getenv("PGUSER"),
+            password=os.getenv("PGPASSWORD"),
+            database=os.getenv("PGDATABASE"),
             max_size=10,  # Укажите максимальный размер пула
         )
         logging.info("Подключение к базе данных успешно")
