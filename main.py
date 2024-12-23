@@ -34,6 +34,9 @@ async def log_pool_state():
         logging.error(f"Ошибка при логировании состояния пула db_pool2: {e}")
 
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+
 # Асинхронная функция для создания пула подключения
 async def get_db_pool2():
     try:
