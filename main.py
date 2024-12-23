@@ -40,16 +40,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # Асинхронная функция для создания пула подключения
 async def get_db_pool2():
     try:
-        return await asyncpg.create_pool(
-            host=os.getenv("PGHOST"),
-            port=os.getenv("PGPORT"),
-            user=os.getenv("PGUSER"),
-            password=os.getenv("PGPASSWORD"),
-            database=os.getenv("PGDATABASE"),
-            max_size=10,  # Укажите максимальный размер пула
-        )
-        logging.info("Подключение к базе данных успешно")
-        return pool
+        if not DATABASE_URL:
+            raise ValueError("DATABASE_URL не задана.")
+
+        return await asyncpg.create_pool(DATABASE_URL, max_size=10)
     except Exception as e:
         logging.error(f"Ошибка при подключении к базе данных: {e}")
         raise
