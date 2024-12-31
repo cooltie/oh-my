@@ -4,7 +4,7 @@ import asyncpg
 from asyncpg import create_pool
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from dotenv import load_dotenv
 import uuid
 import hashlib
@@ -112,8 +112,34 @@ async def get_telegram_id(anon_id):
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
+
+    anon_id, topic_id = await register_user(message.from_user.id)
+
+    # Создаем кнопки
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Написать волонтер_ке")],
+            [KeyboardButton(text="Заполнить форму")],
+        ],
+        resize_keyboard=True,
+    )
+
+    await message.answer(
+        "Привет 👋! Выбери ниже то, что тебе нужно. ✨\n Если мы не ответили тебе втечение 24 ч, то напиши нам на почту: rloveplus@proton.me или в Matrix Element: @br:bark.lgbt \n А так же желаем хорошего тебе дня 💖",
+        reply_markup=keyboard,
+    )
+
+
+# Хэндлер для кнопки "Заполнить форму"
+@dp.message(F.text == "Заполнить форму")
+async def fill_form(message: types.Message):
+    form_url = "https://t.me/InstantFormsBot/form?startapp=9dd0908d-3c39-45cb-afe1-7f4004aa8fc6&startApp=9dd0908d-3c39-45cb-afe1-7f4004aa8fc6"  # Ссылка на вашу форму
+    await message.answer(f"[Заполнить форму]({form_url})", parse_mode="Markdown")
+
+
+@dp.message(F.text == "Написать волонтер_ке")
+async def contact_volunteer(message: types.Message):
     try:
-        anon_id, topic_id = await register_user(message.from_user.id)
 
         # Получаем номер строки в базе
         async with db_pool2.acquire() as conn:
@@ -126,39 +152,82 @@ async def start_command(message: types.Message):
             topic_name = f"{user_number}"
 
             await message.answer(
-                f"Добро пожаловать! Здесь вы можете написать свой запрос. Вы общаетесь с администраторами через бота, поэтому вы остаетесь для них анонимными."
+                f"Добро пожаловать! Здесь ты можешь написать нам. Ты будешь общаться с администраторами через бота, поэтому ты останешься для них анонимными.",
+                reply_markup=ReplyKeyboardRemove(),
             )
     except Exception as e:
         logging.error(f"Ошибка при создании топика: {e}")
-        await message.answer("Произошла ошибка при создании вашей темы.")
 
 
 # Обработчик сообщений от пользователя
 @dp.message(F.chat.type == "private")
 async def handle_user_message(message: types.Message):
-    logging.info(f"Сообщение от {message.from_user.id}: {message.text}")
+    logging.info(
+        f"Сообщение от {message.from_user.id}: {message.text or 'мультимедиа'}"
+    )
 
     # Регистрируем пользователя и получаем данные
     anon_id, topic_id = await register_user(message.from_user.id)
 
-    # Формируем сообщение для отправки в топик
-    forward_message = f"Сообщение от {str(anon_id)[:4]}:\n{message.text}"
+    try:
+        # Формируем идентификатор для анонимности
+        user_tag = f"Сообщение от {str(anon_id)[:4]}:"
 
-    # Отправляем сообщение в топик
-    await bot.send_message(
-        chat_id=GROUP_ID, message_thread_id=topic_id, text=forward_message
-    )
+        # Отправляем разные типы сообщений
+        if message.text:
+            forward_message = f"{user_tag}\n{message.text}"
+            await bot.send_message(
+                chat_id=GROUP_ID, message_thread_id=topic_id, text=forward_message
+            )
+        elif message.photo:
+            await bot.send_photo(
+                chat_id=GROUP_ID,
+                message_thread_id=topic_id,
+                photo=message.photo[-1].file_id,
+                caption=f"{user_tag}\n{message.caption or ''}",
+            )
+        elif message.video:
+            await bot.send_video(
+                chat_id=GROUP_ID,
+                message_thread_id=topic_id,
+                video=message.video.file_id,
+                caption=f"{user_tag}\n{message.caption or ''}",
+            )
+        elif message.document:
+            await bot.send_document(
+                chat_id=GROUP_ID,
+                message_thread_id=topic_id,
+                document=message.document.file_id,
+                caption=f"{user_tag}\n{message.caption or ''}",
+            )
+        elif message.audio:
+            await bot.send_audio(
+                chat_id=GROUP_ID,
+                message_thread_id=topic_id,
+                audio=message.audio.file_id,
+                caption=f"{user_tag}\n{message.caption or ''}",
+            )
+        elif message.voice:
+            await bot.send_voice(
+                chat_id=GROUP_ID,
+                message_thread_id=topic_id,
+                voice=message.voice.file_id,
+                caption=user_tag,
+            )
+        else:
+            await bot.send_message(
+                chat_id=GROUP_ID,
+                message_thread_id=topic_id,
+                text=f"{user_tag}\nТип сообщения пока не поддерживается.",
+            )
 
-    # Уведомляем пользователя
-    await message.answer("Ваше сообщение отправлено администратору.")
+        # Уведомляем пользователя
+        await message.answer("Сообщение отправлено!")
+        logging.info(f"Сообщение от {message.from_user.id} успешно переслано в топик.")
 
-
-@dp.message(F.chat.type.in_(["group", "supergroup"]) & ~F.text.startswith("/"))
-async def handle_admin_reply(message: types.Message):
-    """
-    Обрабатывает новые сообщения от администратора в топиках группы.
-    """
-    await process_admin_message(message)
+    except Exception as e:
+        logging.error(f"Ошибка при обработке сообщения от пользователя: {e}")
+        await message.answer("Произошла ошибка при отправке сообщения.")
 
 
 # Обработка новых сообщений администратора
@@ -168,12 +237,20 @@ async def handle_admin_reply(message: types.Message):
     Обрабатывает только текстовые сообщения от администратора в топиках группы,
     игнорируя команды.
     """
-    # Если сообщение пустое или команда, игнорируем его
-    if not message.text or message.text.startswith("/"):
-        logging.info(f"Игнорирование команды или пустого сообщения: {message.text}")
+    if not any(
+        [
+            message.text,
+            message.photo,
+            message.video,
+            message.document,
+            message.audio,
+            message.voice,
+        ]
+    ):
+        logging.info(f"Игнорирование пустого сообщения или команды: {message.text}")
         return
 
-    # Если сообщение подходит под условия, обрабатываем его
+        # Обрабатываем сообщение
     await process_admin_message(message)
 
 
@@ -183,6 +260,21 @@ async def handle_admin_edited_message(message: types.Message):
     """
     Обрабатывает редактированные сообщения от администратора в топиках группы.
     """
+    topic_id = message.message_thread_id
+
+    # Проверяем, существует ли topic_id в базе
+    async with db_pool2.acquire() as conn:
+        result = await conn.fetchrow(
+            "SELECT telegram_id FROM an_users WHERE topic_id = $1", topic_id
+        )
+
+    if not result:
+        logging.warning(
+            f"Редактирование сообщения в несуществующем топике: {topic_id}. Игнорируем."
+        )
+        return  # Игнорируем редактирование, если пользователь не зарегистрирован
+
+    # Если пользователь найден, продолжаем обработку
     await process_admin_message(message)
 
 
@@ -194,30 +286,55 @@ async def process_admin_message(message: types.Message):
     logging.info(
         f"Обработка сообщения от администратора: {message.text}, чат: {message.chat.id}"
     )
+    # Получаем topic_id из текущего чата
+    topic_id = message.message_thread_id
+
+    # Находим telegram_id пользователя, связанного с этим topic_id
+    async with db_pool2.acquire() as conn:
+        result = await conn.fetchrow(
+            "SELECT telegram_id FROM an_users WHERE topic_id = $1", topic_id
+        )
 
     try:
-        # Получаем topic_id из текущего чата
-        topic_id = message.message_thread_id
+        telegram_id = result["telegram_id"]
 
-        # Находим telegram_id пользователя, связанного с этим topic_id
-        async with db_pool2.acquire() as conn:
-            result = await conn.fetchrow(
-                "SELECT telegram_id FROM an_users WHERE topic_id = $1", topic_id
+        # Пересылаем сообщение пользователю в зависимости от типа контента
+        if message.photo:
+            await bot.send_photo(
+                chat_id=telegram_id,
+                photo=message.photo[-1].file_id,
+                caption=message.caption,
             )
-
-        if result:
-            telegram_id = result["telegram_id"]
-
-            # Пересылаем сообщение пользователю
+        elif message.video:
+            await bot.send_video(
+                chat_id=telegram_id,
+                video=message.video.file_id,
+                caption=message.caption,
+            )
+        elif message.document:
+            await bot.send_document(
+                chat_id=telegram_id,
+                document=message.document.file_id,
+                caption=message.caption,
+            )
+        elif message.audio:
+            await bot.send_audio(
+                chat_id=telegram_id,
+                audio=message.audio.file_id,
+                caption=message.caption,
+            )
+        elif message.voice:
+            await bot.send_voice(
+                chat_id=telegram_id,
+                voice=message.voice.file_id,
+                caption=message.caption,
+            )
+        elif message.text:
             await bot.send_message(
-                chat_id=telegram_id, text=f"Ответ от администратора:\n\n{message.text}"
+                chat_id=telegram_id, text=f"Ответ волонтёр_ки:\n\n{message.text}"
             )
-            logging.info(f"Ответ успешно отправлен пользователю с ID {telegram_id}")
-        else:
-            await message.reply(
-                "Ошибка: Не удалось найти пользователя для данного топика."
-            )
-            logging.error(f"Не найден telegram_id для topic_id: {topic_id}")
+
+        logging.info(f"Ответ успешно отправлен пользователю с ID {telegram_id}")
 
     except Exception as e:
         logging.error(f"Ошибка при обработке ответа администратора: {e}")
