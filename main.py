@@ -57,7 +57,12 @@ async def process_retry_queue():
                 retry_queue.remove(item)
                 logging.info("Сообщение успешно отправлено из очереди.")
             except Exception as e:
-                logging.error(f"Не удалось отправить сообщение из очереди: {e}")
+                # Если ошибка говорит о том, что тред не найден - удаляем сообщение из очереди
+                if "message thread not found" in str(e):
+                    retry_queue.remove(item)
+                    logging.info(f"Удаляем сообщение из очереди, т.к. не найден тред: {e}")
+                else:
+                    logging.error(f"Не удалось отправить сообщение из очереди: {e}")
         await asyncio.sleep(10)
 
 async def safe_send(send_method, **kwargs):
