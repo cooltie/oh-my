@@ -69,11 +69,49 @@ async def safe_send(send_method, **kwargs):
     try:
         return await send_method(**kwargs)
     except Exception as e:
-        logging.error(f"Ошибка отправки, сообщение сохранено для повторной отправки: {e}")
+        error_message = str(e)
+        logging.error(f"Ошибка отправки, сообщение сохранено для повторной отправки: {error_message}")
+
+        # Проверяем, заблокирован ли бот пользователем
+        if "bot was blocked by the user" in error_message:
+            logging.info("Бот заблокирован пользователем. Сообщение не будет повторно отправлено.")
+            return None
+
+        # Проверяем, если тред не найден, создаем новый
+        if "message thread not found" in error_message:
+            logging.info("Тред не найден, создаем новый тред.")
+            chat_id = kwargs.get('chat_id')
+            if chat_id:
+                async with db_pool2.acquire() as conn:
+                    # Получаем анонимный ID пользователя
+                    result = await conn.fetchrow(
+                        f"SELECT anon_id FROM {TABLE_NAME} WHERE telegram_id = $1",
+                        encrypt_telegram_id(str(chat_id))
+                    )
+                    if result:
+                        anon_id = result['anon_id']
+                        topic_title = f"Чат {anon_id[:4]}"
+                        topic_result = await bot.create_forum_topic(
+                            chat_id=GROUP_ID, name=topic_title
+                        )
+                        new_topic_id = topic_result.message_thread_id
+
+                        # Обновляем topic_id в базе данных
+                        await conn.execute(
+                            f"UPDATE {TABLE_NAME} SET topic_id = $1 WHERE telegram_id = $2",
+                            new_topic_id, encrypt_telegram_id(str(chat_id))
+                        )
+                        logging.info(f"Создан новый тред с ID {new_topic_id} для пользователя {chat_id}.")
+                        # Пытаемся отправить сообщение в новый тред
+                        kwargs['message_thread_id'] = new_topic_id
+                        return await send_method(**kwargs)
+            return None
+
         retry_queue.append({
             'send_method': send_method,
             'kwargs': kwargs,
         })
+
         # Пытаемся уведомить пользователя о проблемах, если указан chat_id
         if 'chat_id' in kwargs:
             try:
