@@ -1,4 +1,5 @@
 import asyncio
+import signal
 from asyncio import Lock
 import asyncpg
 import os
@@ -468,6 +469,14 @@ async def process_admin_message(message: types.Message):
 # Инициализация пула и запуск бота
 async def main():
     global db_pool2
+
+    async def shutdown():
+        if db_pool2:
+            await db_pool2.close()
+            logging.info("Пул db_pool2 закрыт")
+        await bot.session.close()
+        logging.info("Сессия бота закрыта")
+
     try:
         db_pool2 = await get_db_pool2()  # Создание пула
         logging.info("Пул db_pool2 успешно создан")
@@ -481,6 +490,10 @@ async def main():
 
         # Запускаем фоновую задачу для повторной отправки сообщений
         asyncio.create_task(process_retry_queue())
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
 
         await dp.start_polling(bot)
     except Exception as e:
